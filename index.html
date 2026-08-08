@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>全員お題入力お絵かき</title>
+    <style>
+        body { margin: 0; padding: 20px; font-family: sans-serif; text-align: center; background: #f0f2f5; }
+        .box { background: white; padding: 20px; border-radius: 10px; max-width: 650px; margin: 0 auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        #canvas { border: 2px solid #333; background: #fff; cursor: crosshair; touch-action: none; margin-top: 10px; }
+        .controls { margin-top: 10px; display: flex; justify-content: center; gap: 10px; align-items: center; }
+        .hidden { display: none !important; }
+        input[type="text"] { padding: 8px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 8px 16px; font-size: 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<div class="box">
+    <h2>🎨 みんなでお題出しお絵かき</h2>
+    <p>現在の参加人数: <span id="playerCount">1</span> 人</p>
+    <h3 id="statusText">他のプレイヤーを待っています...（2人以上で開始）</h3>
+
+    <div id="themeArea" class="hidden">
+        <p>あなたが思いついたお題を1つ入力してください！</p>
+        <input type="text" id="themeInput" placeholder="例: ライオン、宇宙飛行士">
+        <button id="themeBtn">送信</button>
+    </div>
+
+    <div id="gameArea" class="hidden">
+        <h3 style="color: #e91e63;">あなたに当たったお題: <span id="displayTheme"></span></h3>
+        <canvas id="canvas" width="600" height="400"></canvas>
+        <div class="controls">
+            <input type="color" id="colorPicker" value="#000000">
+            <button id="clearBtn">ぜんぶ消す</button>
+        </div>
+    </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+    const socket = io();
+    const playerCount = document.getElementById('playerCount');
+    const statusText = document.getElementById('statusText');
+    const themeArea = document.getElementById('themeArea');
+    const themeInput = document.getElementById('themeInput');
+    const themeBtn = document.getElementById('themeBtn');
+    const gameArea = document.getElementById('gameArea');
+    const displayTheme = document.getElementById('displayTheme');
+    
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const colorPicker = document.getElementById('colorPicker');
+    const clearBtn = document.getElementById('clearBtn');
+
+    let drawing = false;
+    let prevX = 0, prevY = 0;
+
+    socket.on('update-players', (count) => {
+        playerCount.textContent = count;
+    });
+
+    socket.on('game-phase', (data) => {
+        if (data.phase === 'waiting') {
+            statusText.textContent = '他のプレイヤーを待っています...（2人以上で開始）';
+            themeArea.classList.add('hidden');
+            gameArea.classList.add('hidden');
+        } else if (data.phase === 'theme_input') {
+            statusText.textContent = '全員でお題を決めましょう！';
+            themeArea.classList.remove('hidden');
+            gameArea.classList.add('hidden');
+            themeBtn.disabled = false;
+            themeInput.value = '';
+        }
+    });
+
+    // お題送信後、他の人を待つ表示
+    socket.on('waiting-others', () => {
+        statusText.textContent = '他のみんなが入力し終わるのを待っています... ⏳';
+        themeBtn.disabled = true;
+    });
+
+    // 全員の入力が終わってお絵かきスタート
+    socket.on('start-drawing', (data) => {
+        statusText.textContent = 'お絵かきスタート！';
+        themeArea.classList.add('hidden');
+        gameArea.classList.remove('hidden');
+        displayTheme.textContent = data.theme;
+    });
+
+    themeBtn.addEventListener('click', () => {
+        const val = themeInput.value.trim();
+        if (val) {
+            socket.emit('submit-theme', val);
+        }
+    });
+
+    // 描画処理
+    function drawLine(x1, y1, x2, y2, color, emit) {
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+
+        if (emit) socket.emit('draw', { x1, y1, x2, y2, color });
+    }
+
+    canvas.addEventListener('pointerdown', (e) => {
+        drawing = true;
+        const rect = canvas.getBoundingClientRect();
+        prevX = e.clientX - rect.left;
+        prevY = e.clientY - rect.top;
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+        if (!drawing) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        drawLine(prevX, prevY, x, y, colorPicker.value, true);
+        prevX = x;
+        prevY = y;
+    });
+
+    window.addEventListener('pointerup', () => drawing = false);
+
+    clearBtn.addEventListener('click', () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        socket.emit('clear');
+    });
+
+    socket.on('draw', (data) => drawLine(data.x1, data.y1, data.x2, data.y2, data.color, false));
+    socket.on('clear', () => ctx.clearRect(0, 0, canvas.width, canvas.height));
+</script>
+</body>
+</html>
