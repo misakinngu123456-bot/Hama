@@ -1,0 +1,88 @@
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const path = require('path');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
+app.use(express.static(path.join(__dirname)));
+
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+let players = {}; // { socketId: { theme: '', assignedTheme: '' } }
+let gameState = 'waiting'; // waiting, theme_input, drawing
+
+io.on('connection', (socket) => {
+    console.log('プレイヤー接続:', socket.id);
+    players[socket.id] = { theme: '', assignedTheme: '' };
+
+    // 人数更新
+    io.emit('update-players', Object.keys(players).length);
+
+    // 2人以上でゲーム開始準備（お題入力へ）
+    if (Object.keys(players).length >= 2 && gameState === 'waiting') {
+        gameState = 'theme_input';
+        io.emit('game-phase', { phase: 'theme_input' });
+    }
+
+    // 各自がお題を送信したとき
+    socket.on('submit-theme', (theme) => {
+        if (players[socket.id]) {
+            players[socket.id].theme = theme;
+        }
+
+        // 全員がお題を出し終わったかチェック
+        const allSubmitted = Object.values(players).every(p => p.theme !== '');
+        
+        if (allSubmitted) {
+            // お題をシャッフルして全員に配る
+            const playerIds = Object.keys(players);
+            const themes = playerIds.map(id => players[id].theme);
+            
+            // 簡単なシャッフル（自分以外のもの優先）
+            const shuffledThemes = [...themes].sort(() => Math.random() - 0.5);
+
+            playerIds.forEach((id, index) => {
+                players[id].assignedTheme = shuffledThemes[index];
+                // 個別に担当のお題を送信
+                io.to(id).emit('start-drawing', { theme: players[id].assignedTheme });
+            });
+
+            gameState = 'drawing';
+        } else {
+            // まだ全員終わっていない通知
+            socket.emit('waiting-others');
+        }
+    });
+
+    // お絵かきデータ転送
+    socket.on('draw', (data) => {
+        socket.broadcast.emit('draw', data);
+    });
+
+    socket.on('clear', () => {
+        io.emit('clear');
+    });
+
+    // 退出時
+    socket.on('disconnect', () => {
+        delete players[socket.id];
+        io.emit('update-players', Object.keys(players).length);
+
+        if (Object.keys(players).length < 2) {
+            gameState = 'waiting';
+            // 初期化
+            Object.keys(players).forEach(id => players[id].theme = '');
+            io.emit('game-phase', { phase: 'waiting' });
+        }
+    });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});
